@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -20,34 +20,27 @@ import { CoachNavigation } from "@/components/coach-navigation"
 import Link from "next/link"
 import { useParams } from "next/navigation"
 import { supabase } from "@/lib/supabase"
+import { toast } from "@/hooks/use-toast" // Import toast for error messages
+
+interface PlanExerciseState {
+  id: string | number // Can be DB ID (string) or temporary ID (number)
+  exerciseId: string // The actual UUID of the exercise from the 'exercises' table
+  name: string
+  type: "Weighted" | "Bodyweight" | "Cardio"
+  sets: number
+  reps: number
+  weight: number
+  time: number // Corresponds to time_minutes in DB
+  rest: number // Corresponds to rest_seconds in DB
+  tempo: string
+}
 
 export default function PlanBuilderPage() {
   const params = useParams()
+  const planId = params.id as string
 
-  const [planExercises, setPlanExercises] = useState([
-    {
-      id: 1,
-      name: "Barbell Squat",
-      type: "Weighted",
-      sets: 3,
-      reps: 12,
-      weight: 135,
-      rest: 90,
-      tempo: "2-1-2-1",
-    },
-    {
-      id: 2,
-      name: "Push-ups",
-      type: "Bodyweight",
-      sets: 3,
-      reps: 15,
-      rest: 60,
-      tempo: "2-0-2-0",
-    },
-  ])
-
+  const [planExercises, setPlanExercises] = useState<PlanExerciseState[]>([])
   const [availableExercises, setAvailableExercises] = useState<{ id: string; name: string; type: string }[]>([])
-
   const [selectedExercise, setSelectedExercise] = useState("")
   const [exerciseConfig, setExerciseConfig] = useState({
     sets: 3,
@@ -57,9 +50,7 @@ export default function PlanBuilderPage() {
     rest: 60,
     tempo: "2-1-2-1",
   })
-
   const [isAddExerciseOpen, setIsAddExerciseOpen] = useState(false)
-
   const [planDetails, setPlanDetails] = useState({
     name: "",
     clientName: "",
@@ -69,22 +60,48 @@ export default function PlanBuilderPage() {
     difficulty: "Beginner",
     estimatedDuration: "45-60",
   })
-
   const [isSaving, setIsSaving] = useState(false)
+  const [isLoadingPlan, setIsLoadingPlan] = useState(true) // New loading state for plan data
 
   useEffect(() => {
     const loadPlanData = async () => {
+      setIsLoadingPlan(true)
       try {
         const { data, error } = await supabase
           .from("training_plans")
-          .select(`
-        *,
-        client:users!training_plans_client_id_fkey(name)
-      `)
-          .eq("id", params.id)
+          .select(
+            `
+            *,
+            client:users!training_plans_client_id_fkey(name),
+            plan_exercises(
+              id,
+              exercise_id,
+              sets,
+              reps,
+              weight,
+              time_minutes,
+              rest_seconds,
+              tempo,
+              order_index,
+              exercise:exercises(name, type)
+            )
+          `,
+          )
+          .eq("id", planId)
           .single()
 
-        if (error) throw error
+        if (error || !data) {
+          console.error("Error loading plan data or plan not found:", error)
+          toast({
+            title: "Error",
+            description: "Training plan not found or failed to load.",
+            variant: "destructive",
+          })
+          // Optionally redirect to a different page, e.g., /coach/training-plans
+          // router.push("/coach/training-plans");
+          return
+        }
+
         setPlanDetails({
           name: data.name,
           clientName: data.client?.name || "Unknown Client",
@@ -95,31 +112,69 @@ export default function PlanBuilderPage() {
           estimatedDuration: data.estimated_duration || "45-60",
         })
 
-        // 👇 new: fetch this coach's exercise library
+        const loadedExercises = data.plan_exercises
+          .map((pe: any) => ({
+            id: pe.id,
+            exerciseId: pe.exercise_id,
+            name: pe.exercise.name,
+            type: pe.exercise.type,
+            sets: pe.sets,
+            reps: pe.reps || 0,
+            weight: pe.weight || 0,
+            time: pe.time_minutes || 0,
+            rest: pe.rest_seconds,
+            tempo: pe.tempo,
+          }))
+          .sort((a: any, b: any) => a.order_index - b.order_index)
+
+        setPlanExercises(loadedExercises)
+
         const { data: exList } = await supabase
           .from("exercises")
           .select("id,name,type")
-          .eq("coach_id", data.coach_id) // only this coach’s
+          .eq("coach_id", data.coach_id)
           .order("name")
 
         setAvailableExercises(exList || [])
       } catch (error) {
-        console.error("Error loading plan data:", error)
+        console.error("Unexpected error loading plan data:", error)
+        toast({
+          title: "Error",
+          description: "An unexpected error occurred while loading the plan.",
+          variant: "destructive",
+        })
+      } finally {
+        setIsLoadingPlan(false)
       }
     }
 
-    loadPlanData()
-  }, [params.id])
+    if (planId) {
+      loadPlanData()
+    }
+  }, [planId])
+
+  const handleExerciseChange = useCallback((id: string | number, field: keyof PlanExerciseState, value: any) => {
+    setPlanExercises((prev) => prev.map((ex) => (ex.id === id ? { ...ex, [field]: value } : ex)))
+  }, [])
 
   const handleAddExercise = () => {
     const ex = availableExercises.find((e) => e.id === selectedExercise)
-    if (!ex) return
+    if (!ex) {
+      toast({
+        title: "Error",
+        description: "Please select an exercise to add.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const tempId = `new-${Date.now()}-${Math.random().toString(36).substring(2, 9)}` // More robust temporary ID
 
     setPlanExercises((prev) => [
       ...prev,
       {
-        id: prev.length + 1, // local row index
-        exerciseId: ex.id, // ← real UUID
+        id: tempId,
+        exerciseId: ex.id,
         name: ex.name,
         type: ex.type,
         ...exerciseConfig,
@@ -130,24 +185,31 @@ export default function PlanBuilderPage() {
     setExerciseConfig({ sets: 3, reps: 12, weight: 0, time: 0, rest: 60, tempo: "2-1-2-1" })
   }
 
-  const removeExercise = (id: number) => {
+  const removeExercise = (id: string | number) => {
     setPlanExercises(planExercises.filter((ex) => ex.id !== id))
   }
 
   const handleSavePlan = async () => {
     if (!planDetails.name || !planDetails.duration || !planDetails.startDate) {
-      alert("Please fill in all required fields (name, duration, start date)")
+      toast({
+        title: "Validation Error",
+        description: "Please fill in all required fields (name, duration, start date).",
+        variant: "destructive",
+      })
       return
     }
 
     try {
       setIsSaving(true)
 
-      // Calculate end date based on duration
       const startDate = new Date(planDetails.startDate)
       const durationMatch = planDetails.duration.match(/(\d+)\s*weeks?/i)
       if (!durationMatch) {
-        alert("Invalid duration format. Please use format like '4 weeks'")
+        toast({
+          title: "Validation Error",
+          description: "Invalid duration format. Please use format like '4 weeks'.",
+          variant: "destructive",
+        })
         return
       }
 
@@ -155,7 +217,6 @@ export default function PlanBuilderPage() {
       const endDate = new Date(startDate)
       endDate.setDate(endDate.getDate() + durationWeeks * 7)
 
-      // Update the training plan
       const { error: planError } = await supabase
         .from("training_plans")
         .update({
@@ -167,22 +228,20 @@ export default function PlanBuilderPage() {
           difficulty: planDetails.difficulty,
           estimated_duration: planDetails.estimatedDuration,
         })
-        .eq("id", params.id)
+        .eq("id", planId)
 
       if (planError) throw planError
 
-      // Clear existing plan exercises
-      const { error: deleteError } = await supabase.from("plan_exercises").delete().eq("plan_id", params.id)
+      const { error: deleteError } = await supabase.from("plan_exercises").delete().eq("plan_id", planId)
 
       if (deleteError) throw deleteError
 
-      // Save plan exercises
       if (planExercises.length > 0) {
         const exerciseData = planExercises.map((ex, idx) => ({
-          plan_id: params.id,
-          exercise_id: ex.exerciseId, // ✅ real UUID
+          plan_id: planId,
+          exercise_id: ex.exerciseId,
           sets: ex.sets,
-          reps: ex.reps,
+          reps: ex.reps || null,
           weight: ex.weight || null,
           time_minutes: ex.time || null,
           rest_seconds: ex.rest,
@@ -195,10 +254,17 @@ export default function PlanBuilderPage() {
         if (exerciseError) throw exerciseError
       }
 
-      alert("Training plan saved successfully!")
+      toast({
+        title: "Success",
+        description: "Training plan saved successfully!",
+      })
     } catch (error) {
       console.error("Error saving plan:", error)
-      alert("Failed to save training plan")
+      toast({
+        title: "Error",
+        description: "Failed to save training plan. Please try again.",
+        variant: "destructive",
+      })
     } finally {
       setIsSaving(false)
     }
@@ -215,6 +281,15 @@ export default function PlanBuilderPage() {
       default:
         return "bg-gray-100 text-gray-800"
     }
+  }
+
+  if (isLoadingPlan) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <CoachNavigation />
+        <div className="container mx-auto px-4 py-8 text-center">Loading plan data...</div>
+      </div>
+    )
   }
 
   return (
@@ -472,33 +547,76 @@ export default function PlanBuilderPage() {
                         </div>
 
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                          <div>
-                            <span className="text-gray-600">Sets:</span>
-                            <p className="font-medium">{exercise.sets}</p>
+                          <div className="space-y-2">
+                            <Label htmlFor={`sets-${exercise.id}`}>Sets</Label>
+                            <Input
+                              id={`sets-${exercise.id}`}
+                              type="number"
+                              value={exercise.sets}
+                              onChange={(e) =>
+                                handleExerciseChange(exercise.id, "sets", Number.parseInt(e.target.value) || 0)
+                              }
+                            />
                           </div>
-                          <div>
-                            <span className="text-gray-600">Reps:</span>
-                            <p className="font-medium">{exercise.reps}</p>
+                          <div className="space-y-2">
+                            <Label htmlFor={`reps-${exercise.id}`}>Reps</Label>
+                            <Input
+                              id={`reps-${exercise.id}`}
+                              type="number"
+                              value={exercise.reps}
+                              onChange={(e) =>
+                                handleExerciseChange(exercise.id, "reps", Number.parseInt(e.target.value) || 0)
+                              }
+                            />
                           </div>
-                          {exercise.type === "Weighted" && exercise.weight > 0 && (
-                            <div>
-                              <span className="text-gray-600">Weight:</span>
-                              <p className="font-medium">{exercise.weight} kg</p>
+                          {exercise.type === "Weighted" && (
+                            <div className="space-y-2">
+                              <Label htmlFor={`weight-${exercise.id}`}>Weight (kg)</Label>
+                              <Input
+                                id={`weight-${exercise.id}`}
+                                type="number"
+                                step="0.5"
+                                value={exercise.weight || ""}
+                                onChange={(e) =>
+                                  handleExerciseChange(exercise.id, "weight", Number.parseFloat(e.target.value) || 0)
+                                }
+                                placeholder="0"
+                              />
                             </div>
                           )}
-                          {exercise.type === "Cardio" && exercise.time > 0 && (
-                            <div>
-                              <span className="text-gray-600">Time:</span>
-                              <p className="font-medium">{exercise.time} min</p>
+                          {exercise.type === "Cardio" && (
+                            <div className="space-y-2">
+                              <Label htmlFor={`time-${exercise.id}`}>Time (minutes)</Label>
+                              <Input
+                                id={`time-${exercise.id}`}
+                                type="number"
+                                value={exercise.time || ""}
+                                onChange={(e) =>
+                                  handleExerciseChange(exercise.id, "time", Number.parseInt(e.target.value) || 0)
+                                }
+                                placeholder="0"
+                              />
                             </div>
                           )}
-                          <div>
-                            <span className="text-gray-600">Rest:</span>
-                            <p className="font-medium">{exercise.rest}s</p>
+                          <div className="space-y-2">
+                            <Label htmlFor={`rest-${exercise.id}`}>Rest (seconds)</Label>
+                            <Input
+                              id={`rest-${exercise.id}`}
+                              type="number"
+                              value={exercise.rest}
+                              onChange={(e) =>
+                                handleExerciseChange(exercise.id, "rest", Number.parseInt(e.target.value) || 0)
+                              }
+                            />
                           </div>
-                          <div>
-                            <span className="text-gray-600">Tempo:</span>
-                            <p className="font-medium">{exercise.tempo}</p>
+                          <div className="space-y-2">
+                            <Label htmlFor={`tempo-${exercise.id}`}>Tempo</Label>
+                            <Input
+                              id={`tempo-${exercise.id}`}
+                              value={exercise.tempo}
+                              onChange={(e) => handleExerciseChange(exercise.id, "tempo", e.target.value)}
+                              placeholder="2-1-2-1"
+                            />
                           </div>
                         </div>
                       </CardContent>
