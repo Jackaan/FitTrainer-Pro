@@ -62,6 +62,7 @@ export interface TrainingPlan {
   estimated_duration?: string
   start_date?: string
   end_date?: string
+  invoice_amount?: number // New field for invoice amount
   created_at: string
   updated_at: string
   client?: User

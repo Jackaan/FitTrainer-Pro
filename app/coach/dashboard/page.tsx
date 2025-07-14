@@ -1,111 +1,157 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Users, Dumbbell, FileText, Plus, Calendar, DollarSign } from "lucide-react"
-import Link from "next/link"
-import { CoachNavigation } from "@/components/coach-navigation"
-import { supabase } from "@/lib/supabase"
+import { CardDescription } from "@/components/ui/card"
 
-export default function CoachDashboard() {
-  const [userName, setUserName] = useState("")
-  const [userId, setUserId] = useState("")
-  const [stats, setStats] = useState({
+import { useState, useEffect } from "react"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { Users, Dumbbell, Calendar, DollarSign, Activity, ChevronRight } from "lucide-react"
+import { CoachNavigation } from "@/components/coach-navigation"
+import { supabase, type User, type WorkoutSession } from "@/lib/supabase"
+import Link from "next/link"
+import { toast } from "@/hooks/use-toast"
+
+export default function CoachDashboardPage() {
+  const [coachId, setCoachId] = useState<string | null>(null)
+  const [coachName, setCoachName] = useState<string | null>(null)
+  const [metrics, setMetrics] = useState({
+    totalClients: 0,
     activeClients: 0,
-    exercisesCount: 0,
-    trainingPlans: 0,
-    monthlyRevenue: 0,
+    activeTrainingPlans: 0,
+    totalWorkoutsCompleted: 0,
+    totalEarnings: 0,
   })
-  const [recentActivity, setRecentActivity] = useState([])
+  const [recentClients, setRecentClients] = useState<User[]>([])
+  const [upcomingWorkouts, setUpcomingWorkouts] = useState<
+    (WorkoutSession & { client: { name: string } | null; training_plan: { name: string } | null })[]
+  >([])
+  const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
-    const name = localStorage.getItem("userName") || "Coach"
-    const id = localStorage.getItem("userId") || ""
-    setUserName(name)
-    setUserId(id)
-
+    const id = localStorage.getItem("userId")
+    const name = localStorage.getItem("userName")
     if (id) {
+      setCoachId(id)
+      setCoachName(name)
       loadDashboardData(id)
     }
   }, [])
 
   const loadDashboardData = async (coachId: string) => {
     try {
-      // Load exercises count
-      const { count: exercisesCount } = await supabase
-        .from("exercises")
-        .select("*", { count: "exact", head: true })
-        .eq("coach_id", coachId)
+      setIsLoading(true)
 
-      // Load training plans count
-      const { count: plansCount } = await supabase
+      /* ------------------------------------------------------------------
+       * 1. Training plans (all plans for this coach)
+       * -----------------------------------------------------------------*/
+      const { data: plans, error: plansError } = await supabase
         .from("training_plans")
-        .select("*", { count: "exact", head: true })
+        .select("id,status,client_id")
         .eq("coach_id", coachId)
 
-      // Load active clients count
-      const { count: clientsCount } = await supabase
-        .from("training_plans")
-        .select("client_id", { count: "exact", head: true })
-        .eq("coach_id", coachId)
-        .eq("status", "Active")
+      if (plansError) throw plansError
 
-      // Load monthly revenue
-      const { data: invoices } = await supabase
+      const allClientIds = Array.from(new Set(plans.map((p) => p.client_id)))
+      const activePlans = plans.filter((p) => p.status === "Active")
+      const activeClientIds = Array.from(new Set(activePlans.map((p) => p.client_id)))
+
+      /* ------------------------------------------------------------------
+       * 2. Workouts completed (for this coach’s clients)
+       * -----------------------------------------------------------------*/
+      let totalWorkoutsCompleted = 0
+      if (allClientIds.length) {
+        const { count: completedCount, error: wcError } = await supabase
+          .from("workout_sessions")
+          .select("*", { count: "exact", head: true })
+          .in("client_id", allClientIds)
+          .eq("status", "Completed")
+
+        if (wcError) throw wcError
+        totalWorkoutsCompleted = completedCount || 0
+      }
+
+      /* ------------------------------------------------------------------
+       * 3. Earnings (all paid invoices for this coach)
+       * -----------------------------------------------------------------*/
+      const { data: paidInvoices, error: invError } = await supabase
         .from("invoices")
         .select("amount")
         .eq("coach_id", coachId)
         .eq("status", "Paid")
-        .gte("created_at", new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString())
 
-      const monthlyRevenue = invoices?.reduce((sum, invoice) => sum + invoice.amount, 0) || 0
+      if (invError) throw invError
 
-      setStats({
-        activeClients: clientsCount || 0,
-        exercisesCount: exercisesCount || 0,
-        trainingPlans: plansCount || 0,
-        monthlyRevenue,
+      const totalEarnings = (paidInvoices ?? []).reduce((sum, inv) => sum + inv.amount, 0)
+
+      /* ------------------------------------------------------------------
+       * 4. Metrics state
+       * -----------------------------------------------------------------*/
+      setMetrics({
+        totalClients: allClientIds.length,
+        activeClients: activeClientIds.length,
+        activeTrainingPlans: activePlans.length,
+        totalWorkoutsCompleted,
+        totalEarnings,
       })
 
-      // Load recent workout sessions for activity
-      const { data: sessions } = await supabase
-        .from("workout_sessions")
-        .select(`
-          *,
-          training_plan:training_plans(
-            client:users!training_plans_client_id_fkey(name)
-          )
-        `)
-        .eq("training_plans.coach_id", coachId)
-        .order("updated_at", { ascending: false })
-        .limit(4)
+      /* ------------------------------------------------------------------
+       * 5. Recent clients (newest 5 among this coach’s clients)
+       * -----------------------------------------------------------------*/
+      const { data: recentClientsData, error: rcError } = await supabase
+        .from("users")
+        .select("id,name,email,profile_image_url")
+        .in("id", allClientIds)
+        .order("created_at", { ascending: false })
+        .limit(5)
 
-      if (sessions) {
-        const activity = sessions.map((session) => ({
-          client: session.training_plan?.client?.name || "Unknown",
-          action: session.status === "Completed" ? "Completed workout" : "Updated workout",
-          time: new Date(session.updated_at).toLocaleString(),
-        }))
-        setRecentActivity(activity)
-      }
+      if (rcError) throw rcError
+      setRecentClients(recentClientsData ?? [])
+
+      /* ------------------------------------------------------------------
+       * 6. Upcoming workouts (next 5 sessions for this coach’s plans)
+       * -----------------------------------------------------------------*/
+      const today = new Date().toISOString().split("T")[0]
+
+      const { data: upcomingData, error: upError } = await supabase
+        .from("workout_sessions")
+        .select(
+          `
+        *,
+        training_plan:training_plans(name),
+        client:users!workout_sessions_client_id_fkey(name)
+      `,
+        )
+        .eq("training_plans.coach_id", coachId)
+        .gte("scheduled_date", today)
+        .in("status", ["Scheduled", "In Progress"])
+        .order("scheduled_date", { ascending: true })
+        .limit(5)
+
+      if (upError) throw upError
+      setUpcomingWorkouts(upcomingData ?? [])
     } catch (error) {
       console.error("Error loading dashboard data:", error)
+      toast({
+        title: "Error",
+        description: "Failed to load dashboard data.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsLoading(false)
     }
   }
 
-  const statsDisplay = [
-    { title: "Active Clients", value: stats.activeClients.toString(), icon: Users, color: "text-blue-600" },
-    { title: "Exercises in Library", value: stats.exercisesCount.toString(), icon: Dumbbell, color: "text-green-600" },
-    { title: "Training Plans", value: stats.trainingPlans.toString(), icon: Calendar, color: "text-purple-600" },
-    {
-      title: "Monthly Revenue",
-      value: `$${stats.monthlyRevenue.toFixed(0)}`,
-      icon: DollarSign,
-      color: "text-yellow-600",
-    },
-  ]
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <CoachNavigation />
+        <div className="container mx-auto px-4 py-8">
+          <div className="text-center">Loading dashboard...</div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -113,84 +159,128 @@ export default function CoachDashboard() {
 
       <div className="container mx-auto px-4 py-8">
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Welcome back, {userName}!</h1>
-          <p className="text-gray-600 mt-2">Here's what's happening with your clients today.</p>
+          <h1 className="text-3xl font-bold text-gray-900">Welcome back, {coachName || "Coach"}!</h1>
+          <p className="text-gray-600 mt-2">Here's an overview of your fitness empire.</p>
         </div>
 
-        {/* Stats Grid */}
+        {/* Metrics Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-          {statsDisplay.map((stat, index) => (
-            <Card key={index}>
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-gray-600">{stat.title}</p>
-                    <p className="text-2xl font-bold text-gray-900">{stat.value}</p>
-                  </div>
-                  <stat.icon className={`h-8 w-8 ${stat.color}`} />
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Total Clients</CardTitle>
+              <Users className="h-4 w-4 text-gray-500" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{metrics.totalClients}</div>
+              <p className="text-xs text-gray-500">Total clients registered</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Active Clients</CardTitle>
+              <Activity className="h-4 w-4 text-gray-500" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{metrics.activeClients}</div>
+              <p className="text-xs text-gray-500">Clients with active plans</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Active Training Plans</CardTitle>
+              <Dumbbell className="h-4 w-4 text-gray-500" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{metrics.activeTrainingPlans}</div>
+              <p className="text-xs text-gray-500">Currently active plans</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Total Earnings</CardTitle>
+              <DollarSign className="h-4 w-4 text-gray-500" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">${metrics.totalEarnings.toFixed(2)}</div>
+              <p className="text-xs text-gray-500">From paid invoices</p>
+            </CardContent>
+          </Card>
         </div>
 
-        <div className="grid lg:grid-cols-2 gap-8">
-          {/* Quick Actions */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Recent Clients */}
           <Card>
             <CardHeader>
-              <CardTitle>Quick Actions</CardTitle>
-              <CardDescription>Common tasks to get you started</CardDescription>
+              <CardTitle className="text-lg">Recent Clients</CardTitle>
+              <CardDescription>Your newest additions to the team.</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <Link href="/coach/exercises">
-                <Button className="w-full justify-start bg-transparent" variant="outline">
-                  <Plus className="mr-2 h-4 w-4" />
-                  Add New Exercise
-                </Button>
-              </Link>
-              <Link href="/coach/training-plans">
-                <Button className="w-full justify-start bg-transparent" variant="outline">
-                  <Calendar className="mr-2 h-4 w-4" />
-                  Create Training Plan
-                </Button>
-              </Link>
-              <Link href="/coach/invoices">
-                <Button className="w-full justify-start bg-transparent" variant="outline">
-                  <FileText className="mr-2 h-4 w-4" />
-                  Generate Invoice
-                </Button>
-              </Link>
-              <Link href="/coach/clients">
-                <Button className="w-full justify-start bg-transparent" variant="outline">
-                  <Users className="mr-2 h-4 w-4" />
-                  Manage Clients
-                </Button>
-              </Link>
+            <CardContent>
+              {recentClients.length === 0 ? (
+                <p className="text-gray-500 text-sm">No recent clients.</p>
+              ) : (
+                <div className="space-y-4">
+                  {recentClients.map((client) => (
+                    <div key={client.id} className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <Avatar className="h-9 w-9">
+                          <AvatarImage src={client.profile_image_url || "/placeholder.svg"} alt={client.name} />
+                          <AvatarFallback>
+                            {client.name
+                              .split(" ")
+                              .map((n) => n[0])
+                              .join("")
+                              .toUpperCase()}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div>
+                          <p className="font-medium">{client.name}</p>
+                          <p className="text-sm text-gray-500">{client.email}</p>
+                        </div>
+                      </div>
+                      <Link href={`/coach/clients?clientId=${client.id}`}>
+                        <Button variant="ghost" size="sm">
+                          View <ChevronRight className="ml-1 h-4 w-4" />
+                        </Button>
+                      </Link>
+                    </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
 
-          {/* Recent Activity */}
+          {/* Upcoming Workouts */}
           <Card>
             <CardHeader>
-              <CardTitle>Recent Activity</CardTitle>
-              <CardDescription>Latest updates from your clients</CardDescription>
+              <CardTitle className="text-lg">Upcoming Workouts</CardTitle>
+              <CardDescription>Sessions scheduled for your clients.</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="space-y-4">
-                {recentActivity.length > 0 ? (
-                  recentActivity.map((activity, index) => (
-                    <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                      <div>
-                        <p className="font-medium text-gray-900">{activity.client}</p>
-                        <p className="text-sm text-gray-600">{activity.action}</p>
+              {upcomingWorkouts.length === 0 ? (
+                <p className="text-gray-500 text-sm">No upcoming workouts.</p>
+              ) : (
+                <div className="space-y-4">
+                  {upcomingWorkouts.map((session) => (
+                    <div key={session.id} className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <Calendar className="h-5 w-5 text-gray-500" />
+                        <div>
+                          <p className="font-medium">{session.client?.name || "N/A"}</p>
+                          <p className="text-sm text-gray-500">
+                            {session.training_plan?.name || "N/A"} •{" "}
+                            {new Date(session.scheduled_date).toLocaleDateString("en-GB")}
+                          </p>
+                        </div>
                       </div>
-                      <Badge variant="secondary">{activity.time}</Badge>
+                      <Link href={`/coach/clients?clientId=${session.client_id}&tab=history`}>
+                        <Button variant="ghost" size="sm">
+                          View <ChevronRight className="ml-1 h-4 w-4" />
+                        </Button>
+                      </Link>
                     </div>
-                  ))
-                ) : (
-                  <p className="text-gray-500 text-center py-4">No recent activity</p>
-                )}
-              </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>

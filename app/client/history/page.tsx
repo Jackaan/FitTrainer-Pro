@@ -1,61 +1,130 @@
 "use client"
 
+import Link from "next/link"
+
 import { useState, useEffect } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Calendar, CheckCircle, Clock, TrendingUp, Eye } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+import { Calendar, Dumbbell, Eye, MessageSquare } from "lucide-react"
 import { ClientNavigation } from "@/components/client-navigation"
-import { supabase } from "@/lib/supabase"
+import { supabase, type WorkoutSession, type PlanExercise, type ExerciseFeedback } from "@/lib/supabase"
+
+interface WorkoutSessionWithDetails extends WorkoutSession {
+  training_plan?: { name: string }
+  exercises?: (PlanExercise & {
+    exercise: { name: string; type: string }
+    feedback?: ExerciseFeedback
+  })[]
+}
 
 export default function ClientHistoryPage() {
-  const [workoutHistory, setWorkoutHistory] = useState([])
   const [userId, setUserId] = useState("")
+  const [completedWorkouts, setCompletedWorkouts] = useState<WorkoutSessionWithDetails[]>([])
+  const [selectedWorkout, setSelectedWorkout] = useState<WorkoutSessionWithDetails | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
     const id = localStorage.getItem("userId")
     if (id) {
       setUserId(id)
-      loadWorkoutHistory(id)
+      loadCompletedWorkouts(id)
     }
   }, [])
 
-  const loadWorkoutHistory = async (clientId: string) => {
+  const loadCompletedWorkouts = async (clientId: string) => {
     try {
+      setIsLoading(true)
       const { data, error } = await supabase
         .from("workout_sessions")
-        .select(`
-        *,
-        training_plan:training_plans(name),
-        exercise_feedback(feedback)
-      `)
+        .select(
+          `
+          id,
+          scheduled_date,
+          completed_date,
+          duration_minutes,
+          status,
+          training_plan:training_plans(name)
+        `,
+        )
         .eq("client_id", clientId)
         .eq("status", "Completed")
         .order("completed_date", { ascending: false })
 
       if (error) throw error
-
-      const processedHistory =
-        data?.map((workout) => ({
-          id: workout.id,
-          name: workout.training_plan?.name || "Workout",
-          date: workout.completed_date?.split("T")[0] || workout.scheduled_date,
-          duration: workout.duration_minutes || 0,
-          exercises: 0, // This could be calculated from plan_exercises
-          completed: true,
-          feedback: workout.exercise_feedback?.[0]?.feedback || "Completed workout",
-        })) || []
-
-      setWorkoutHistory(processedHistory)
+      setCompletedWorkouts(data || [])
     } catch (error) {
-      console.error("Error loading workout history:", error)
+      console.error("Error loading completed workouts:", error)
+    } finally {
+      setIsLoading(false)
     }
   }
 
-  const totalWorkouts = workoutHistory.length
-  const totalDuration = workoutHistory.reduce((sum, workout) => sum + workout.duration, 0)
-  const averageDuration = Math.round(totalDuration / totalWorkouts)
-  const currentStreak = 5 // Mock streak calculation
+  const loadWorkoutDetails = async (sessionId: string, planId: string) => {
+    try {
+      // Fetch plan exercises for the workout's plan
+      const { data: planExercises, error: planExercisesError } = await supabase
+        .from("plan_exercises")
+        .select(
+          `
+          *,
+          exercise:exercises(name, type)
+        `,
+        )
+        .eq("plan_id", planId)
+        .order("order_index", { ascending: true })
+
+      if (planExercisesError) throw planExercisesError
+
+      // Fetch feedback for this specific session
+      const { data: exerciseFeedback, error: feedbackError } = await supabase
+        .from("exercise_feedback")
+        .select("*")
+        .eq("session_id", sessionId)
+
+      if (feedbackError) throw feedbackError
+
+      // Combine plan exercises with their feedback
+      const exercisesWithFeedback = planExercises?.map((planEx) => {
+        const feedback = exerciseFeedback?.find((fb) => fb.exercise_id === planEx.exercise_id)
+        return {
+          ...planEx,
+          feedback,
+        }
+      })
+
+      return exercisesWithFeedback || []
+    } catch (error) {
+      console.error("Error loading workout details:", error)
+      return []
+    }
+  }
+
+  const handleViewDetails = async (workout: WorkoutSessionWithDetails) => {
+    if (workout.plan_id) {
+      const exercises = await loadWorkoutDetails(workout.id, workout.plan_id)
+      setSelectedWorkout({ ...workout, exercises })
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <ClientNavigation />
+        <div className="container mx-auto px-4 py-8">
+          <div className="text-center">Loading history...</div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -64,97 +133,118 @@ export default function ClientHistoryPage() {
       <div className="container mx-auto px-4 py-8">
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900">Workout History</h1>
-          <p className="text-gray-600 mt-2">Track your fitness journey and progress</p>
+          <p className="text-gray-600 mt-2">Review your past training sessions and progress.</p>
         </div>
 
-        {/* Stats Overview */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-gray-600">Total Workouts</p>
-                  <p className="text-2xl font-bold text-gray-900">{totalWorkouts}</p>
-                </div>
-                <CheckCircle className="h-8 w-8 text-green-600" />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-gray-600">Total Time</p>
-                  <p className="text-2xl font-bold text-gray-900">{Math.round(totalDuration / 60)}h</p>
-                </div>
-                <Clock className="h-8 w-8 text-blue-600" />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-gray-600">Avg Duration</p>
-                  <p className="text-2xl font-bold text-gray-900">{averageDuration}m</p>
-                </div>
-                <TrendingUp className="h-8 w-8 text-purple-600" />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-gray-600">Current Streak</p>
-                  <p className="text-2xl font-bold text-gray-900">{currentStreak}</p>
-                </div>
-                <Calendar className="h-8 w-8 text-yellow-600" />
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Workout History List */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Recent Workouts</CardTitle>
-            <CardDescription>Your completed training sessions</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {workoutHistory.map((workout) => (
-                <div
-                  key={workout.id}
-                  className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50 transition-colors"
-                >
-                  <div className="flex items-center gap-4">
-                    <div className="flex items-center justify-center w-10 h-10 bg-green-100 rounded-full">
-                      <CheckCircle className="w-5 h-5 text-green-600" />
-                    </div>
+        <div className="space-y-6">
+          {completedWorkouts.length > 0 ? (
+            completedWorkouts.map((workout) => (
+              <Card key={workout.id}>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="font-semibold text-gray-900">{workout.name}</h3>
+                      <CardTitle className="text-lg">{workout.training_plan?.name || "Workout Session"}</CardTitle>
                       <p className="text-sm text-gray-600">
-                        {new Date(workout.date).toLocaleDateString("en-GB")} • {workout.duration} min •{" "}
-                        {workout.exercises} exercises
+                        <Calendar className="inline-block h-4 w-4 mr-1 text-gray-500" />
+                        {new Date(workout.completed_date!).toLocaleDateString("en-GB")}
                       </p>
-                      {workout.feedback && <p className="text-sm text-gray-500 italic mt-1">"{workout.feedback}"</p>}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {workout.duration_minutes && (
+                        <Badge variant="secondary">
+                          <Dumbbell className="h-3 w-3 mr-1" />
+                          {workout.duration_minutes} min
+                        </Badge>
+                      )}
+                      <Dialog>
+                        <DialogTrigger asChild>
+                          <Button size="icon" variant="outline" onClick={() => handleViewDetails(workout)}>
+                            <Eye className="h-4 w-4" />
+                            <span className="sr-only">View Details</span>
+                          </Button>
+                        </DialogTrigger>
+                        {selectedWorkout && selectedWorkout.id === workout.id && (
+                          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+                            <DialogHeader>
+                              <DialogTitle>
+                                {selectedWorkout.training_plan?.name || "Workout Session"} Details
+                              </DialogTitle>
+                              <DialogDescription>
+                                Completed on {new Date(selectedWorkout.completed_date!).toLocaleDateString("en-GB")}
+                                {selectedWorkout.duration_minutes && ` (${selectedWorkout.duration_minutes} minutes)`}
+                              </DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-4">
+                              {selectedWorkout.exercises && selectedWorkout.exercises.length > 0 ? (
+                                selectedWorkout.exercises.map((exercise, index) => (
+                                  <Card key={exercise.id}>
+                                    <CardHeader>
+                                      <CardTitle className="text-base">
+                                        {index + 1}. {exercise.exercise?.name}
+                                      </CardTitle>
+                                    </CardHeader>
+                                    <CardContent className="space-y-2">
+                                      <div className="grid grid-cols-2 gap-2 text-sm">
+                                        <div>
+                                          <span className="font-medium">Sets:</span> {exercise.sets}
+                                        </div>
+                                        {exercise.reps && (
+                                          <div>
+                                            <span className="font-medium">Reps:</span> {exercise.reps}
+                                          </div>
+                                        )}
+                                        {exercise.weight && (
+                                          <div>
+                                            <span className="font-medium">Weight:</span> {exercise.weight} kg
+                                          </div>
+                                        )}
+                                        {exercise.time_minutes && (
+                                          <div>
+                                            <span className="font-medium">Time:</span> {exercise.time_minutes} min
+                                          </div>
+                                        )}
+                                        <div>
+                                          <span className="font-medium">Rest:</span> {exercise.rest_seconds} sec
+                                        </div>
+                                        {exercise.tempo && (
+                                          <div>
+                                            <span className="font-medium">Tempo:</span> {exercise.tempo}
+                                          </div>
+                                        )}
+                                      </div>
+                                      {exercise.feedback?.feedback && (
+                                        <div className="mt-3 p-3 bg-blue-50 rounded-lg border-l-4 border-blue-400">
+                                          <div className="flex items-center gap-1 text-sm text-gray-700 italic">
+                                            <MessageSquare className="h-4 w-4" />"{exercise.feedback.feedback}"
+                                          </div>
+                                        </div>
+                                      )}
+                                    </CardContent>
+                                  </Card>
+                                ))
+                              ) : (
+                                <p className="text-center text-gray-500">No exercises found for this workout.</p>
+                              )}
+                            </div>
+                          </DialogContent>
+                        )}
+                      </Dialog>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="default">Completed</Badge>
-                    <Button size="icon" variant="outline">
-                      <Eye className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-              ))}
+                </CardHeader>
+              </Card>
+            ))
+          ) : (
+            <div className="text-center py-12">
+              <Dumbbell className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+              <h3 className="text-lg font-medium text-gray-900 mb-2">No completed workouts yet</h3>
+              <p className="text-gray-500">Start a workout to see your history here!</p>
+              <Button asChild className="mt-4">
+                <Link href="/client/workouts">Start Workout</Link>
+              </Button>
             </div>
-          </CardContent>
-        </Card>
+          )}
+        </div>
       </div>
     </div>
   )

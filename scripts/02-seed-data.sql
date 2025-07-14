@@ -12,7 +12,17 @@ INSERT INTO exercises (id, coach_id, name, category, type, description, image_ur
   ('650e8400-e29b-41d4-a716-446655440002', '550e8400-e29b-41d4-a716-446655440001', 'Push-ups', 'Chest', 'Bodyweight', 'Classic upper body exercise targeting chest, shoulders, and triceps.', '/placeholder.svg?height=200&width=300'),
   ('650e8400-e29b-41d4-a716-446655440003', '550e8400-e29b-41d4-a716-446655440001', 'Running', 'Cardio', 'Cardio', 'Cardiovascular exercise for endurance and fat burning.', '/placeholder.svg?height=200&width=300'),
   ('650e8400-e29b-41d4-a716-446655440004', '550e8400-e29b-41d4-a716-446655440001', 'Deadlift', 'Back', 'Weighted', 'Compound exercise targeting posterior chain muscles.', '/placeholder.svg?height=200&width=300'),
-  ('650e8400-e29b-41d4-a716-446655440005', '550e8400-e29b-41d4-a716-446655440001', 'Plank', 'Core', 'Bodyweight', 'Isometric core strengthening exercise.', '/placeholder.svg?height=200&width=300')
+  ('650e8400-e29b-41d4-a716-446655440005', '550e8400-e29b-41d4-a716-446655440001', 'Plank', 'Core', 'Bodyweight', 'Isometric core strengthening exercise.', '/placeholder.svg?height=200&width=300'),
+  ('650e8400-e29b-41d4-a716-446655440006', '550e8400-e29b-41d4-a716-446655440001', 'Bench Press', 'Chest', 'Weighted', 'Strength exercise for chest, shoulders, and triceps.', '/placeholder.svg?height=200&width=300'),
+  ('650e8400-e29b-41d4-a716-446655440007', '550e8400-e29b-41d4-a716-446655440001', 'Pull-ups', 'Back', 'Bodyweight', 'Upper body exercise for back and biceps.', '/placeholder.svg?height=200&width=300'),
+  ('650e8400-e29b-41d4-a716-446655440008', '550e8400-e29b-41d4-a716-446655440001', 'Overhead Press', 'Shoulders', 'Weighted', 'Compound exercise for shoulders and triceps.', '/placeholder.svg?height=200&width=300'),
+  ('650e8400-e29b-41d4-a716-446655440009', '550e8400-e29b-41d4-a716-446655440001', 'Lunges', 'Legs', 'Bodyweight', 'Unilateral leg exercise for quadriceps, hamstrings, and glutes.', '/placeholder.svg?height=200&width=300'),
+  ('650e8400-e29b-41d4-a716-446655440010', '550e8400-e29b-41d4-a716-446655440001', 'Barbell Row', 'Back', 'Weighted', 'Compound exercise for back thickness.', '/placeholder.svg?height=200&width=300'),
+  ('650e8400-e29b-41d4-a716-446655440011', '550e8400-e29b-41d4-a716-446655440001', 'Dips', 'Chest', 'Bodyweight', 'Upper body exercise for chest, shoulders, and triceps.', '/placeholder.svg?height=200&width=300'),
+  ('650e8400-e29b-41d4-a716-446655440012', '550e8400-e29b-41d4-a716-446655440001', 'Bicep Curls', 'Arms', 'Weighted', 'Isolation exercise for biceps.', '/placeholder.svg?height=200&width=300'),
+  ('650e8400-e29b-41d4-a716-4466554400013', '550e8400-e29b-41d4-a716-446655440001', 'Tricep Extensions', 'Arms', 'Weighted', 'Isolation exercise for triceps.', '/placeholder.svg?height=200&width=300'),
+  ('650e8400-e29b-41d4-a716-4466554400014', '550e8400-e29b-41d4-a716-446655440001', 'Calf Raises', 'Legs', 'Weighted', 'Isolation exercise for calves.', '/placeholder.svg?height=200&width=300'),
+  ('650e8400-e29b-41d4-a716-4466554400015', '550e8400-e29b-41d4-a716-446655440001', 'Crunches', 'Core', 'Bodyweight', 'Core exercise for abdominal muscles.', '/placeholder.svg?height=200&width=300')
 ON CONFLICT (id) DO NOTHING;
 
 -- Insert sample training plans
